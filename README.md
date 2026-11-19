@@ -136,17 +136,37 @@ For the full branch/PR rules, SemVer tag policy, and the reviewer checklist, see
 
 ---
 
+## Release Run Evidence — v1.0.0 (2026-11-19)
+
+End-to-end evidence for issue [#31](https://github.com/OrenOren1/refael/issues/31), tag [`v1.0.0`](https://github.com/OrenOren1/refael/tree/v1.0.0) on commit `d657650`.
+
+| Stage | Evidence |
+|---|---|
+| Release workflow | [run 44535808394](https://github.com/OrenOren1/refael/actions/runs/44535808394) — success: `detect` → `build-scan-push` → `update-image-tag` |
+| Trivy gate | `Trivy scan — gate on HIGH+ (ignore unfixed)` passed inside `build-scan-push` **before** any registry login/push; SARIF uploaded as artifact `trivy-sarif` |
+| ECR push | `294747659026.dkr.ecr.us-east-1.amazonaws.com/sample-nodejs:v1.0.0`, digest `sha256:46a9b3f1e2f2f5ffc80e367917288f5c91f3b783bb684d43e44d1c22002bf7d0` (OIDC, keyless) |
+| Deploy PR | [PR #34](https://github.com/OrenOren1/refael/pull/34) — patches `helm/values.yaml` to the ECR repository and `image.tag: v1.0.0`; merged as `8e99443` |
+| Post-merge CI | [run 44536558495](https://github.com/OrenOren1/refael/actions/runs/44536558495) — success (`lint-helm` on the changed chart) |
+
+**Cluster outcome (documented blocker):** no ArgoCD sync/deployment update was observable. Both EKS node groups (`refael-nodes`, `refael-big`) were at `desired=0`, so the ArgoCD controllers were `Pending` and `kubectl get nodes` returned none. The live `Application` also retained manual drift from the earlier test session — `helm.parameters.image.tag=1.0.1` and automated sync suspended — versus the repo manifest, which has no parameter overrides and enables `automated`. Restoring nodes and re-applying `argocd/application.yaml` is required before cluster-side sync can be verified.
+
+**Run notes:** the first two `update-image-tag` attempts failed — first because the repository disallowed PR creation by `GITHUB_TOKEN`, then because the leftover `deploy/image-v1.0.0` branch from the failed attempt rejected a non-fast-forward push. Enabling `can_approve_pull_request_reviews`, deleting the stale branch, and re-running failed jobs produced the green run above. [PR #34's own check run](https://github.com/OrenOren1/refael/actions/runs/44536353828) has zero jobs because events triggered by `GITHUB_TOKEN` do not start new workflows; the merge commit's `main` run is the authoritative verification.
+
+---
+
 ## Infrastructure
 
-Provisioned by Terraform (`terraform/`), applied once before first pipeline run:
+Provisioned by Terraform (`terraform/`), applied once before first pipeline run (`terraform/main.tf`, `variables.tf`):
 
 | Resource | Details |
 |---|---|
 | ECR repository | `sample-nodejs`, scan-on-push, lifecycle: keep last 10 |
 | GitHub OIDC provider | Keyless auth — no `AWS_SECRET_ACCESS_KEY` in secrets |
-| IAM role | `github-actions-refael` — ECR push only, scoped to this repo |
-| EKS cluster | `refael`, Kubernetes 1.31, `us-east-1` (AZs: a/b/c/d/f) |
-| EKS node group | 2× t3.medium, ECR read-only via node IAM role |
+| IAM roles/policies | `github-actions-refael` — ECR push + Terraform plan-read, scoped to this repo (`repo:OrenOren1/refael:*`); EKS cluster/node roles with managed policy attachments |
+| EKS cluster | `refael`, Kubernetes 1.31, `us-east-1` default-VPC subnets filtered to AZs a/b/c/d/f |
+| EKS node group | `refael-nodes`, `t3.small` (default), desired 2 / min 1 / max 3, node role has `AmazonEC2ContainerRegistryReadOnly` |
+
+**Scope note:** current Terraform provisions ECR, GitHub OIDC/IAM, and EKS (cluster + node group). It does **not** provision ACM certificates or Route53 records. ADR-011 has been aligned to this actual scope. The chart's nginx Ingress defaults to HTTP (`ingress.tls.enabled=false`, placeholder host, no cert secret/ARN wired in values); HTTPS termination/certificate provisioning is outside this Terraform and was not part of the recorded demo path.
 
 ```bash
 # One-time setup
@@ -234,15 +254,29 @@ Every non-obvious choice is documented. Here's the full set:
 
 A few things I'd flag for a reviewer:
 
+**SAST / SCA gate behavior (requirement mapping):** the assignment asks to fail if critical vulnerabilities are found in code. Actual gates (`.github/workflows/ci.yml`):
+- **`njsscan` (source-code SAST)** — runs in `sast` on app changes and fails the job on any finding it reports (default action behavior, no severity-only filter), so reported code issues block.
+- **`npm audit --audit-level=high` (dependency SCA, not source SAST)** — fails on HIGH and CRITICAL dependency CVEs in the dependency tree.
+- **Trivy image scan** — runs before push in `build-and-scan`/`build-scan-push` with `exit-code: "1"`, `severity: "HIGH,CRITICAL"`, `ignore-unfixed: "true"` (SARIF uploaded), so fixable HIGH/CRITICAL image CVEs block and unfixed ones are logged but not blocking.
+
+Together these satisfy the intent of blocking critical risk and are stricter in places (njsscan fails on any finding; npm audit/Trivy gate HIGH+). They differ from a literal "critical-only, source-code-only" gate by covering dependency/image layers and by blocking fixable HIGH findings as well.
+
 **No long-lived AWS credentials** — GitHub Actions authenticates via OIDC (`sts:AssumeRoleWithWebIdentity`). No `AWS_ACCESS_KEY_ID` or `AWS_SECRET_ACCESS_KEY` anywhere. The IAM role is scoped to this exact repo (`repo:OrenOren1/refael:*`).
 
 **npm removed from runtime image** — `node:22-alpine` bundles npm, which bundles `glob@13` and `minimatch` with known CVEs. npm is not needed to run `node app.js`. Removing it entirely (`rm -rf /usr/local/lib/node_modules/npm`) eliminates the CVE surface without suppression. `apk upgrade --no-cache` patches OS-level packages at build time.
 
 **Pipeline fails on fixable CVEs** — `ignore-unfixed: true` means Trivy only blocks on CVEs that have a fix available. We're not blocking on theoretical risk — we're blocking on "you can fix this today."
 
-**Least-privilege CI permissions** — `permissions: contents: read` global default. Only `build-scan-push` elevates to `id-token: write` (for OIDC) and `contents: write` (for the deploy PR commit). PR jobs never get write access.
+**Least-privilege CI permissions** — `permissions: contents: read` global default. Only jobs that need elevation declare it (`build-scan-push`: `id-token: write`; `update-image-tag`: `contents: write`, `pull-requests: write`; `check-terraform`: `id-token: write` for PR plan). PR jobs never get write access to repo contents.
 
 ---
+
+## Submission Clarifications
+
+- **SAST / severity vs "critical vulnerabilities in code":** see [Security Decisions](#security-decisions) for the exact gate mapping. In short: `njsscan` blocks on any reported source finding; `npm audit --audit-level=high` (SCA) blocks on HIGH/CRITICAL deps; Trivy blocks fixable HIGH/CRITICAL image CVEs before push — satisfying the critical-risk intent while differing from a literal critical-only/code-only gate.
+- **Runtime/demo config (v1.0.0):** image `294747659026.dkr.ecr.us-east-1.amazonaws.com/sample-nodejs:v1.0.0` (deploy PR [#34](https://github.com/OrenOren1/refael/pull/34) merged, `helm/values.yaml`). Ingress values: `enabled: true`, `className: nginx`, `host: app.example.com` (placeholder, override per environment), `tls.enabled: false`, `certArn: ""`, path `/` → Service `ClusterIP` port `80` → container `8080` (`/ready`, `/live`, `/my-app`). No public demo URL was recorded because cluster-side ArgoCD sync could not be shown in [Release Run Evidence — v1.0.0](#release-run-evidence--v100-2026-11-19) (EKS nodes at desired 0, live app drift); local demo: `task deploy:local` (k3d) then `curl http://localhost:8080/my-app`.
+- **Infra scope / HTTPS path:** Terraform provisions ECR, GitHub OIDC + IAM, and EKS only (no ACM/Route53). nginx Ingress is configured but TLS is not enabled/provisioned by default; demo path is HTTP through ingress/service (or local k3d). See [Infrastructure](#infrastructure) and [ADR-011](docs/adlc/memory/adr/ADR-011.md).
+- **Deployment rationale:** `Deployment` chosen because the app is stateless with no persistent/node-local state, so rolling updates, probes, and scaling fit (ADR-001). Same-repo GitOps: ArgoCD watches `helm/` in this repo (`argocd/application.yaml`, ADR-005) for single-app simplicity and one review stream; CI opens image-tag deploy PRs instead of pushing to `main` (ADR-008).
 
 ## For Reviewers
 
