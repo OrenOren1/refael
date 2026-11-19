@@ -1,0 +1,16 @@
+# EKS profile: AWS Load Balancer Controller terminates TLS with an ACM certificate.
+# Requires a validated ACM cert in the ALB region and the AWS Load Balancer Controller.
+# Local k3d keeps the default nginx ingress from values.yaml.
+ingress:
+  className: alb
+  host: "app.example.com" # override with your domain
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "true"
+  tls:
+    enabled: false # ALB terminates TLS; no in-cluster TLS Secret needed
+    # Required: ACM cert ARN, e.g.
+    # arn:aws:acm:us-east-1:294747659026:certificate/00000000-0000-0000-0000-000000000000
+    certArn: "" # set via ArgoCD parameter or: helm ... --set-string ingress.tls.certArn=<arn>

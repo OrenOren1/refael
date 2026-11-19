@@ -1,21 +1,34 @@
+{{- if .Values.ingress.enabled }}
+{{- if and (eq .Values.ingress.className "alb") (not .Values.ingress.tls.certArn) }}
+{{- fail "ingress.tls.certArn is required when ingress.className is alb" }}
+{{- end }}
+{{- $ingressAnnotations := dict }}
+{{- if eq .Values.ingress.className "nginx" }}
+{{- $_ := set $ingressAnnotations "nginx.ingress.kubernetes.io/proxy-body-size" "1m" }}
+{{- end }}
+{{- with .Values.ingress.tls.certArn }}
+{{- $_ := set $ingressAnnotations "alb.ingress.kubernetes.io/certificate-arn" . }}
+{{- end }}
+{{- range $key, $value := .Values.ingress.annotations }}
+{{- $_ := set $ingressAnnotations $key $value }}
+{{- end }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: {{ include "sample-nodejs.fullname" . }}
   labels:
     {{- include "sample-nodejs.labels" . | nindent 4 }}
+  {{- with $ingressAnnotations }}
   annotations:
-    nginx.ingress.kubernetes.io/proxy-body-size: "1m"
-    {{- if .Values.ingress.tls.certArn }}
-    service.beta.kubernetes.io/aws-load-balancer-ssl-cert: {{ .Values.ingress.tls.certArn | quote }}
-    {{- end }}
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   ingressClassName: {{ .Values.ingress.className }}
-  {{- if .Values.ingress.tls.enabled }}
+  {{- if and .Values.ingress.tls.enabled (not .Values.ingress.tls.certArn) }}
   tls:
     - hosts:
         - {{ .Values.ingress.host | quote }}
-      secretName: {{ include "sample-nodejs.fullname" . }}-tls
+      secretName: {{ default (printf "%s-tls" (include "sample-nodejs.fullname" .)) .Values.ingress.tls.secretName }}
   {{- end }}
   rules:
     - host: {{ .Values.ingress.host | quote }}
@@ -28,3 +41,4 @@ spec:
                 name: {{ include "sample-nodejs.fullname" . }}
                 port:
                   number: {{ .Values.service.port }}
+{{- end }}

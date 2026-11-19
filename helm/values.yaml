@@ -1,23 +1,21 @@
 replicaCount: 2
-
 image:
-  repository: ""  # set to ECR URI by terraform output / CI
-  tag: "1.0.0"
+  repository: "294747659026.dkr.ecr.us-east-1.amazonaws.com/sample-nodejs" # set to ECR URI by terraform output / CI
+  tag: "v1.0.0"
   pullPolicy: IfNotPresent
-
 service:
   type: ClusterIP
   port: 80
   targetPort: 8080
-
 ingress:
   enabled: true
-  className: nginx
-  host: "app.example.com"  # override with your domain
+  className: nginx # k3d/local default; EKS uses values-eks.yaml (alb)
+  host: "a15ebd35af7e94bdca165ccf4a99414d-23966090.us-east-1.elb.amazonaws.com"
+  annotations: {}
   tls:
-    enabled: false          # set true + provide cert-arn annotation for prod
-    certArn: ""             # ACM cert ARN (aws alb.ingress.kubernetes.io/certificate-arn)
-
+    enabled: false # controller-level TLS via a Secret (k3d/nginx); ALB terminates ACM itself
+    certArn: "" # ACM cert ARN -> alb.ingress.kubernetes.io/certificate-arn (EKS)
+    secretName: "" # defaults to <release>-tls when tls.enabled and no certArn
 resources:
   requests:
     cpu: 100m
@@ -25,20 +23,16 @@ resources:
   limits:
     cpu: 250m
     memory: 256Mi
-
 autoscaling:
   enabled: false
   minReplicas: 2
   maxReplicas: 5
   targetCPUUtilizationPercentage: 70
-
 config:
   port: "8080"
-
 podDisruptionBudget:
   enabled: true
   minAvailable: 1
-
 securityContext:
   runAsNonRoot: true
   runAsUser: 1000
@@ -47,7 +41,6 @@ securityContext:
   capabilities:
     drop:
       - ALL
-
 probes:
   readiness:
     path: /ready
