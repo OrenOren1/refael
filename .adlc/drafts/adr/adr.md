@@ -17,8 +17,7 @@
 | ADR-011 | Deployment | Terraform for AWS Infrastructure Provisioning | accepted | 2026-11-19 | Oren Sultan | [ADR-011.md](ADR-011.md) |
 | ADR-012 | CI/CD | Bonus: Hadolint + Helm Lint in CI | accepted | 2026-11-19 | Oren Sultan | [ADR-012.md](ADR-012.md) |
 | ADR-013 | Development | Local Dev Task Runner: Taskfile (go-task) | accepted | 2026-11-19 | Oren Sultan | [ADR-013.md](ADR-013.md) |
-| ADR-014 | CI/CD | CI Routing by Changed Paths and Branch | accepted | 2026-11-19 | Oren Sultan | [ADR-014.md](ADR-014.md) |
-| ADR-015 | CI/CD | Terraform Plan in the PR Gate via OIDC Read Policy | accepted | 2026-11-19 | Oren Sultan | [ADR-015.md](ADR-015.md) |
+| ADR-016 | Deployment | EKS ALB Ingress with ACM Certificate; nginx for k3d | accepted | 2026-11-19 | Oren Sultan | [ADR-016.md](ADR-016.md) |
 
 
 ---
@@ -38,6 +37,5 @@
 - [ADR-011: Terraform for AWS Infrastructure Provisioning](ADR-011.md)
 - [ADR-012: Bonus: Hadolint + Helm Lint in CI](ADR-012.md)
 - [ADR-013: Local Dev Task Runner: Taskfile (go-task)](ADR-013.md)
-- [ADR-014: CI Routing by Changed Paths and Branch](ADR-014.md)
-- [ADR-015: Terraform Plan in the PR Gate via OIDC Read Policy](ADR-015.md)
+- [ADR-016: EKS ALB Ingress with ACM Certificate; nginx for k3d](ADR-016.md)
 

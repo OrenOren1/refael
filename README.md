@@ -166,7 +166,7 @@ Provisioned by Terraform (`terraform/`), applied once before first pipeline run 
 | EKS cluster | `refael`, Kubernetes 1.31, `us-east-1` default-VPC subnets filtered to AZs a/b/c/d/f |
 | EKS node group | `refael-nodes`, `t3.small` (default), desired 2 / min 1 / max 3, node role has `AmazonEC2ContainerRegistryReadOnly` |
 
-**Scope note:** current Terraform provisions ECR, GitHub OIDC/IAM, and EKS (cluster + node group). It does **not** provision ACM certificates or Route53 records. ADR-011 has been aligned to this actual scope. The chart's nginx Ingress defaults to HTTP (`ingress.tls.enabled=false`, placeholder host, no cert secret/ARN wired in values); HTTPS termination/certificate provisioning is outside this Terraform and was not part of the recorded demo path.
+**Scope note:** current Terraform provisions ECR, GitHub OIDC/IAM, and EKS (cluster + node group). It does **not** provision ACM certificates or Route53 records; ADR-011 has been aligned to this actual scope. Ingress differs by environment: `helm/values.yaml` is the k3d/local default (`ingress.className: nginx`, HTTP, no cert), while `helm/values-eks.yaml` is the EKS profile (AWS Load Balancer Controller `alb` class, ACM cert via `alb.ingress.kubernetes.io/certificate-arn`) and is loaded by `argocd/application.yaml`. Both the AWS Load Balancer Controller and a validated ACM certificate are prerequisites; the certificate ARN must be supplied via `ingress.tls.certArn` (ArgoCD parameter or Helm `--set-string`). The certificate itself is not created by this Terraform and was not part of the recorded demo path.
 
 ```bash
 # One-time setup
@@ -199,7 +199,7 @@ Kubernetes objects deployed:
 |---|---|
 | `Deployment` | 2 replicas, stateless, rolling update |
 | `Service` | ClusterIP, port 80 → container 8080 |
-| `Ingress` | nginx ingress class, host configurable |
+| `Ingress` | k3d/nginx by default; EKS uses `alb` class with ACM cert ARN (`values-eks.yaml`) |
 | `ConfigMap` | `PORT` env var injected |
 | `HorizontalPodAutoscaler` | optional, CPU-based |
 | `PodDisruptionBudget` | `minAvailable: 1` |
@@ -242,11 +242,13 @@ Every non-obvious choice is documented. Here's the full set:
 | [ADR-006](/.adlc/drafts/adr/ADR-006.md) | SAST: `njsscan` + `npm audit` | njsscan is Node.js-specific OWASP-listed; npm audit covers dependency CVEs separately |
 | [ADR-007](/.adlc/drafts/adr/ADR-007.md) | Trivy: HIGH+, ignore-unfixed | Pragmatic gate — block what can actually be fixed today |
 | [ADR-008](/.adlc/drafts/adr/ADR-008.md) | CI opens deploy PR (not direct push) | Every deploy is a reviewable git event; bad image = no PR, cluster stays on last good |
-| [ADR-009](/.adlc/drafts/adr/ADR-009.md) | EKS (prod) + k3d (local) | nginx-ingress works identically on both — zero environment divergence |
+| [ADR-009](/.adlc/drafts/adr/ADR-009.md) | EKS (prod) + k3d (local) | Originally nginx on both for parity; EKS now uses ALB ingress to terminate ACM TLS (see `values-eks.yaml`) |
 | [ADR-010](/.adlc/drafts/adr/ADR-010.md) | Semver git tags trigger release pipeline | Human-readable, sortable; decouples release from every commit push |
 | [ADR-011](/.adlc/drafts/adr/ADR-011.md) | Terraform for AWS infra | Reproducible, reviewable, idempotent — no click-ops |
 | [ADR-012](/.adlc/drafts/adr/ADR-012.md) | Hadolint + helm lint in CI | Catch Dockerfile and chart issues before they reach image build |
 | [ADR-013](/.adlc/drafts/adr/ADR-013.md) | Taskfile as local task runner | Single YAML, Go binary, mirrors CI step order exactly |
+| [ADR-014](docs/adlc/memory/adr/ADR-014.md) | CI routing by changed paths and branch | One `detect` job gates app/helm/terraform/argocd/release work |
+| [ADR-015](docs/adlc/memory/adr/ADR-015.md) | Terraform plan in PR gate via OIDC read policy | Shows the infra diff without long-lived AWS keys |
 
 ---
 
@@ -275,7 +277,7 @@ Together these satisfy the intent of blocking critical risk and are stricter in 
 
 - **SAST / severity vs "critical vulnerabilities in code":** see [Security Decisions](#security-decisions) for the exact gate mapping. In short: `njsscan` blocks on any reported source finding; `npm audit --audit-level=high` (SCA) blocks on HIGH/CRITICAL deps; Trivy blocks fixable HIGH/CRITICAL image CVEs before push — satisfying the critical-risk intent while differing from a literal critical-only/code-only gate.
 - **Runtime/demo config (v1.0.0):** image `294747659026.dkr.ecr.us-east-1.amazonaws.com/sample-nodejs:v1.0.0` (deploy PR [#34](https://github.com/OrenOren1/refael/pull/34) merged, `helm/values.yaml`). Ingress values: `enabled: true`, `className: nginx`, `host: app.example.com` (placeholder, override per environment), `tls.enabled: false`, `certArn: ""`, path `/` → Service `ClusterIP` port `80` → container `8080` (`/ready`, `/live`, `/my-app`). No public demo URL was recorded because cluster-side ArgoCD sync could not be shown in [Release Run Evidence — v1.0.0](#release-run-evidence--v100-2026-11-19) (EKS nodes at desired 0, live app drift); local demo: `task deploy:local` (k3d) then `curl http://localhost:8080/my-app`.
-- **Infra scope / HTTPS path:** Terraform provisions ECR, GitHub OIDC + IAM, and EKS only (no ACM/Route53). nginx Ingress is configured but TLS is not enabled/provisioned by default; demo path is HTTP through ingress/service (or local k3d). See [Infrastructure](#infrastructure) and [ADR-011](docs/adlc/memory/adr/ADR-011.md).
+- **Infra scope / HTTPS path:** Terraform provisions ECR, GitHub OIDC + IAM, and EKS only (no ACM/Route53). k3d/local runs nginx ingress over HTTP; EKS loads `helm/values-eks.yaml` via ArgoCD and uses ALB ingress with an ACM certificate ARN (`ingress.tls.certArn` → `alb.ingress.kubernetes.io/certificate-arn`), requiring the AWS Load Balancer Controller and a pre-existing validated cert. See [Infrastructure](#infrastructure) and [ADR-011](docs/adlc/memory/adr/ADR-011.md).
 - **Deployment rationale:** `Deployment` chosen because the app is stateless with no persistent/node-local state, so rolling updates, probes, and scaling fit (ADR-001). Same-repo GitOps: ArgoCD watches `helm/` in this repo (`argocd/application.yaml`, ADR-005) for single-app simplicity and one review stream; CI opens image-tag deploy PRs instead of pushing to `main` (ADR-008).
 
 ## For Reviewers
