@@ -9,11 +9,13 @@ service:
   targetPort: 8080
 ingress:
   enabled: true
-  className: nginx
+  className: nginx # k3d/local default; EKS uses values-eks.yaml (alb)
   host: "a15ebd35af7e94bdca165ccf4a99414d-23966090.us-east-1.elb.amazonaws.com"
+  annotations: {}
   tls:
-    enabled: false # set true + provide cert-arn annotation for prod
-    certArn: "" # ACM cert ARN (aws alb.ingress.kubernetes.io/certificate-arn)
+    enabled: false # controller-level TLS via a Secret (k3d/nginx); ALB terminates ACM itself
+    certArn: "" # ACM cert ARN -> alb.ingress.kubernetes.io/certificate-arn (EKS)
+    secretName: "" # defaults to <release>-tls when tls.enabled and no certArn
 resources:
   requests:
     cpu: 100m
